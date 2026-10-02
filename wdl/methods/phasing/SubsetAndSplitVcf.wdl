@@ -6,6 +6,8 @@ workflow SubsetAndSplitVcf {
         File joint_vcf
         File joint_vcf_idx
         String region
+        Int expected_number_of_sites
+
         String gcs_output_dir
         String output_tag
 
@@ -26,6 +28,9 @@ workflow SubsetAndSplitVcf {
         sample_batches_tsv: {
             description: "see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0"
         }
+        expected_number_of_sites: {
+            description: "expected number of sites in this region, used for safeguard against streaming errors"
+        }
     }
 
     call SubsetAndSplitVcf { input:
@@ -33,6 +38,7 @@ workflow SubsetAndSplitVcf {
         vcf_idx = joint_vcf_idx,
 
         region  = region,
+        expected_number_of_sites = expected_number_of_sites,
 
         sample_batches_tsv = sample_batches_tsv,
 
@@ -44,6 +50,8 @@ workflow SubsetAndSplitVcf {
         scatter (batch_vcf in SubsetAndSplitVcf.split_vcf_paths) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
                 vcf = batch_vcf,
+
+                expected_number_of_sites = expected_number_of_sites,
 
                 gcs_output_dir = gcs_output_dir,
                 output_tag = output_tag
@@ -69,6 +77,8 @@ task SubsetAndSplitVcf {
     input {
         File  vcf
         File? vcf_idx       # only needed for initial stream, not for batches
+
+        Int expected_number_of_sites
 
         String? region      # only needed for initial stream, not for batches
 
@@ -119,7 +129,8 @@ task SubsetAndSplitVcf {
             -Ob -o ~{output_tag}.bcf
 
         # check number of sites to guard against streaming errors
-        bcftools view -H ~{output_tag}.bcf | wc -l > number_of_sites.txt
+        N=$(bcftools view -H ~{output_tag}.bcf | wc -l | awk '{print $1}')
+        if [[ ${N} -ne ~{expected_number_of_sites} ]]; then echo "Number of sites unexpected"; exit 1; fi
 
         bcftools +split ~{output_tag}.bcf ~{"--samples-file " + sample_batches_tsv} -Ob -o output
 
