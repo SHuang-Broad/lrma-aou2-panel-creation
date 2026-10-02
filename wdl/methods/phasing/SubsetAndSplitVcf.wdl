@@ -41,12 +41,9 @@ workflow SubsetAndSplitVcf {
     }
     
     if (defined(sample_batches_tsv)) {
-        Int num_batches = length(read_lines(select_first([sample_batches_tsv])))
-        scatter (i in range(num_batches)) {
+        scatter (batch_vcf in SubsetAndSplitVcf.split_vcf_paths) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
-                vcf = gcs_output_dir + "/batches/batch-" + i + "." + output_tag + ".bcf",
-
-                wait_for_me = SubsetAndSplitVcf.number_of_sites,
+                vcf = batch_vcf,
 
                 gcs_output_dir = gcs_output_dir,
                 output_tag = output_tag
@@ -77,8 +74,6 @@ task SubsetAndSplitVcf {
 
         File? sample_batches_tsv
 
-        Int? wait_for_me    # dummy input to gate scatter until initial split is done
-
         String gcs_output_dir
         String output_tag
 
@@ -98,10 +93,6 @@ task SubsetAndSplitVcf {
         }
 
         sample_batches_tsv: {
-            description: ""
-        }
-
-        wait_for_me: {
             description: ""
         }
 
