@@ -7,19 +7,37 @@ workflow SubsetAndSplitVcf {
         File joint_vcf_idx
         String region
         String gcs_output_dir
-        String output_tag           # per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf
+        String output_tag
 
         # optional hierarchical split
-        File? sample_batches_tsv      # see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0
+        File? sample_batches_tsv
+    }
+
+    output {
+        Int number_of_sites = SubsetAndSplitVcf.number_of_sites
+        Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])),
+                                                      SubsetAndSplitVcf.split_vcf_paths])
+    }
+
+    parameter_meta {
+        output_tag: {
+            description: "per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf"
+        }
+        sample_batches_tsv: {
+            description: "see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0"
+        }
     }
 
     call SubsetAndSplitVcf { input:
-        vcf = joint_vcf,
+        vcf     = joint_vcf,
         vcf_idx = joint_vcf_idx,
-        region = region,
-        gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
+
+        region  = region,
+
         sample_batches_tsv = sample_batches_tsv,
-        output_tag = output_tag
+
+        gcs_output_dir = if defined(sample_batches_tsv) then gcs_output_dir + "/batches" else gcs_output_dir,
+        output_tag     = output_tag
     }
     
     if (defined(sample_batches_tsv)) {
@@ -27,18 +45,15 @@ workflow SubsetAndSplitVcf {
         scatter (i in range(num_batches)) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
                 vcf = gcs_output_dir + "/batches/batch-" + i + "." + output_tag + ".bcf",
-                gcs_output_dir = gcs_output_dir,
+
                 wait_for_me = SubsetAndSplitVcf.number_of_sites,
+
+                gcs_output_dir = gcs_output_dir,
                 output_tag = output_tag
             }
         }
     }
 
-    output {
-        Int number_of_sites = SubsetAndSplitVcf.number_of_sites
-        Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])), 
-                                                      SubsetAndSplitVcf.split_vcf_paths])
-    }
 }
 
 struct RuntimeAttr {
@@ -55,20 +70,43 @@ struct RuntimeAttr {
 task SubsetAndSplitVcf {
 
     input {
-        File vcf
+        File  vcf
         File? vcf_idx       # only needed for initial stream, not for batches
+
         String? region      # only needed for initial stream, not for batches
+
+        File? sample_batches_tsv
+
+        Int? wait_for_me    # dummy input to gate scatter until initial split is done
+
         String gcs_output_dir
         String output_tag
-        File? sample_batches_tsv
-        Int? wait_for_me    # dummy input to gate scatter until initial split is done
+
         Int view_verbosity = 8
+
         RuntimeAttr? runtime_attr_override
+    }
+
+    output {
+        Int number_of_sites = read_int("number_of_sites.txt")
+        Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
     }
 
     parameter_meta {
         vcf: {
             localization_optional: true
+        }
+
+        sample_batches_tsv: {
+            description: ""
+        }
+
+        wait_for_me: {
+            description: ""
+        }
+
+        split_vcf_paths: {
+            description: ""
         }
     }
     
@@ -103,10 +141,6 @@ task SubsetAndSplitVcf {
         gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
     >>>
 
-    output {
-        Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
-        Int number_of_sites = read_int("number_of_sites.txt")
-    }
     ###################
     RuntimeAttr default_attr = object {
         cpu_cores:          1,
