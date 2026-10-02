@@ -12,6 +12,8 @@ workflow SubsetAndSplitVcf {
         String region
         Int expected_number_of_sites
 
+        Int expected_sample_count
+
         String gcs_output_dir
         String output_tag
 
@@ -20,8 +22,8 @@ workflow SubsetAndSplitVcf {
     }
 
     output {
-        Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])),
-                                                      SubsetAndSplitVcf.split_vcf_paths])
+        Array[String] split_vcf_paths = res
+        String validation_gate = if vcf_count_ok then "ok" else select_first(empty_string_array)
     }
 
     parameter_meta {
@@ -36,6 +38,9 @@ workflow SubsetAndSplitVcf {
         }
         split_vcf_paths: {
             description: "GCS URI of the split per-sample VCF"
+        }
+        validation_gate: {
+            validation_gate: "enforces the split VCF counts are correct"
         }
     }
 
@@ -65,6 +70,11 @@ workflow SubsetAndSplitVcf {
             }
         }
     }
+
+    Array[String] res = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])),
+                                      SubsetAndSplitVcf.split_vcf_paths])
+    Boolean vcf_count_ok = length(split_vcf_paths) == expected_sample_count
+    Array[String?] empty_string_array = []
 }
 
 struct RuntimeAttr {
