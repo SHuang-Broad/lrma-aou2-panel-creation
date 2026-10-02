@@ -139,8 +139,19 @@ task SubsetAndSplitVcf {
             mv $bcf output/$bcf_basename.~{output_tag}.bcf
         done
 
-        gcloud storage cp output/*.bcf ~{gcs_output_dir}/
-        gsutil ls ~{gcs_output_dir}/*bcf > output_vcf_paths.txt
+        # user-controlled result saving
+        gcloud storage cp \
+            output/*.bcf \
+            "~{gcs_output_dir}/"
+
+        # Report only the files produced by this invocation.
+        # Do not list the shared GCS directory: other scattered calls may be
+        # writing there concurrently, and previous runs may have left files.
+        : > output_vcf_paths.txt
+        for bcf in output/*.bcf; do
+            bcf_basename=$(basename "$bcf")
+            echo "~{gcs_output_dir}/$bcf_basename" >> output_vcf_paths.txt
+        done
     >>>
 
     ###################
