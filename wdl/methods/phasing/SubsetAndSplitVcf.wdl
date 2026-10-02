@@ -2,6 +2,10 @@ version 1.0
 
 workflow SubsetAndSplitVcf {
 
+    meta {
+        description: "For subsetting an input project VCF into the desired region, followed by per-sample splitting."
+    }
+
     input {
         File joint_vcf
         File joint_vcf_idx
@@ -16,7 +20,6 @@ workflow SubsetAndSplitVcf {
     }
 
     output {
-        Int number_of_sites = SubsetAndSplitVcf.number_of_sites
         Array[String] split_vcf_paths = select_first([flatten(select_first([SubsetAndSplitVcfBatch.split_vcf_paths])),
                                                       SubsetAndSplitVcf.split_vcf_paths])
     }
@@ -26,10 +29,13 @@ workflow SubsetAndSplitVcf {
             description: "per-sample BCFs will be copied to gcs_output_dir/{sample_name}.{output_tag}.bcf"
         }
         sample_batches_tsv: {
-            description: "see bcftools +split --help; e.g., contains rows: {sample_name_1},{sample_name_2},...\t-\tbatch-0"
+            description: "when provided, perform the per-sample split in batches defined in this file; each row is formatted: {sample_name_1},{sample_name_2},...\t-\tbatch-0; see `bcftools +split --help`"
         }
         expected_number_of_sites: {
             description: "expected number of sites in this region, used for safeguard against streaming errors"
+        }
+        split_vcf_paths: {
+            description: "GCS URI of the split per-sample VCF"
         }
     }
 
@@ -46,6 +52,7 @@ workflow SubsetAndSplitVcf {
         output_tag     = output_tag
     }
     
+    # when sample-batching is desired, i.e. large cohorts, a 2nd round is necessary to generate the per-sample VCFs
     if (defined(sample_batches_tsv)) {
         scatter (batch_vcf in SubsetAndSplitVcf.split_vcf_paths) {
             call SubsetAndSplitVcf as SubsetAndSplitVcfBatch { input:
@@ -58,7 +65,6 @@ workflow SubsetAndSplitVcf {
             }
         }
     }
-
 }
 
 struct RuntimeAttr {
@@ -80,7 +86,7 @@ task SubsetAndSplitVcf {
 
         Int expected_number_of_sites
 
-        String? region      # only needed for initial stream, not for batches
+        String? region
 
         File? sample_batches_tsv
 
@@ -93,7 +99,6 @@ task SubsetAndSplitVcf {
     }
 
     output {
-        Int number_of_sites = read_int("number_of_sites.txt")
         Array[String] split_vcf_paths = read_lines("output_vcf_paths.txt")
     }
 
@@ -102,12 +107,16 @@ task SubsetAndSplitVcf {
             localization_optional: true
         }
 
+        region: {
+            description: "region to subset the VCF to; when the samples are batch processed, no need to provide in the 2nd round for per-sample split"
+        }
+
         sample_batches_tsv: {
-            description: ""
+            description: "when provided, perform the per-sample split in batches defined in this file; each row is formatted: {sample_name_1},{sample_name_2},...\t-\tbatch-0; see `bcftools +split --help`"
         }
 
         split_vcf_paths: {
-            description: ""
+            description: "GCS URI of the split VCF; it could be per-batch or per-sample"
         }
     }
     
@@ -132,8 +141,14 @@ task SubsetAndSplitVcf {
         N=$(bcftools view -H ~{output_tag}.bcf | wc -l | awk '{print $1}')
         if [[ ${N} -ne ~{expected_number_of_sites} ]]; then echo "Number of sites unexpected"; exit 1; fi
 
-        bcftools +split ~{output_tag}.bcf ~{"--samples-file " + sample_batches_tsv} -Ob -o output
+        # per-sample or per-batch split
+        bcftools +split \
+            ~{output_tag}.bcf \
+            ~{"--samples-file " + sample_batches_tsv} \
+            -Ob \
+        -o output
 
+        # apply tag to the output
         for bcf in output/*.bcf; do
             bcf_basename=$(basename $bcf .bcf)
             mv $bcf output/$bcf_basename.~{output_tag}.bcf
